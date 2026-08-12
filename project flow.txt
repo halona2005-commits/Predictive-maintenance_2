@@ -1,0 +1,46 @@
+14 metrics
+    "cpu_percent",
+    "cpu_frequency_mhz",
+    "memory_percent",
+    "memory_available_mb",
+    "disk_percent",
+    "disk_read_mbps",
+    "disk_write_mbps",
+    "network_upload_mbps",
+    "network_download_mbps",
+    "process_count",
+    "top_cpu_process",     
+    "top_cpu_pid",         
+    "top_mem_process",     
+    "top_mem_pid" 
+
+  
+interval 1sec duration 2 hrs data collection from 1 system (normal + highload)  total 14 to 16k samples these datasets is then 
+
+                         feature enginerring 
+                                |   
+                               \ /
+
+cpu_precent    memory_precent     disk_precent      network_precent
+
+these raw data will be calculated using 
+ |_  Rolling Z-Score Z = (Current_Value - Rolling_Mean) / Rolling_Std                                                                                                                        (Z-Score significantly outperforms traditional methods like IQR in time-series data.)
+
+ |_ Domain-Knowledge Combined Features
+             |_ Memory Pressure (to catch system thrashing) Memory_Pressure = Memory% * (1 + Disk_Write/10)
+                               This formula spikes massively when the system is freezing due to swapping.
+             |_ CPU Efficiency (to catch rogue processes) CPU_Efficiency = CPU% / Process_Count
+                              single process maybe more dangerous than many background processes
+             |_ System Saturation (overall health) System_Saturation = (CPU/100) + (Memory/100) + (Disk_IO/500) 
+                              (Disk_IO = disk_read_mbps + disk_write_mbps)
+                              This gives a single 0-to-3 score for overall system load.
+
+we write a python script for the dataset that gives 8 features + 1 output label
+
+these featured data will have 7 columns (Timestamp, CPU_Zscore, Memory_Zscore, disk_Zscore, Network_Zscore, Memory_Pressure, CPU_Efficiency, System_Saturation)  output label will 0(normal) and 1(highload)
+
+then  feature enginerring  output data is then sent to 6 models 
+Random Forest, XGBoost, Isolation Forest, LSTM, One Class Suv , and Compressed If and we compare the accuarcy and latency then take any 2 models  
+
+
+

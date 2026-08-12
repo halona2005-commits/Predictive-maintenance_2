@@ -10,6 +10,7 @@ import {
   Legend
 } from "chart.js";
 import { Line } from "react-chartjs-2";
+import { connectLiveWS } from "../services/api"; // <-- Import the new function
 
 ChartJS.register(
   CategoryScale,
@@ -21,45 +22,42 @@ ChartJS.register(
   Legend
 );
 
-const API = "http://127.0.0.1:8000";
-
 export default function LiveMonitor() {
-  const [history, setHistory] = useState([]);
-  const [prediction, setPrediction] = useState(null);
-
-  const fetchData = async () => {
-    try {
-      const [h, p] = await Promise.all([
-        fetch(`${API}/history`).then(r => r.json()),
-        fetch(`${API}/predict`).then(r => r.json())
-      ]);
-
-      setHistory((h.metrics || []).slice(-30));
-      setPrediction(p);
-    } catch (err) {
-      console.error(err);
-    }
-  };
+  // We store the live datapoints in an array
+  const [metricsHistory, setMetricsHistory] = useState([]);
 
   useEffect(() => {
-    fetchData();
-    const timer = setInterval(fetchData, 5000);
-    return () => clearInterval(timer);
+    // Connect to WebSocket and handle incoming data
+    const ws = connectLiveWS((data) => {
+      console.log("Live Data Received:", data);
+      
+      // Create a new chart point
+      const newPoint = {
+        timestamp: new Date().toLocaleTimeString(), // Format time for X-Axis
+        cpu: data.cpu,
+        memory: data.memory,
+        disk: data.disk || 0, // Fallback if not sent yet
+        risk: data.risk
+      };
+
+      // Append to state. Limit to 50 points so the chart doesn't get too slow.
+      setMetricsHistory(prev => [...prev, newPoint].slice(-50));
+    });
+
+    // Cleanup WebSocket when component unmounts
+    return () => ws.close();
   }, []);
 
-  const labels = history.map((m) =>
-    new Date(m.timestamp).toLocaleTimeString()
-  );
+  // Extract data for the charts
+  const labels = metricsHistory.map((m) => m.timestamp);
+  const cpu = metricsHistory.map((m) => m.cpu);
+  const memory = metricsHistory.map((m) => m.memory);
+  const disk = metricsHistory.map((m) => m.disk);
+  
+  // ✨ THIS IS THE FIX! The risk now maps to the live risk from the backend
+  const risk = metricsHistory.map((m) => m.risk);
 
-  const cpu = history.map(m => m.cpu_percent);
-  const memory = history.map(m => m.memory_percent);
-  const disk = history.map(m => m.disk_write_mbps);
-
-  const risk = history.map(() =>
-    prediction ? prediction.risk_score * 100 : 0
-  );
-
-  const latest = history.length ? history[history.length - 1] : null;
+  const latest = metricsHistory.length ? metricsHistory[metricsHistory.length - 1] : null;
 
   const makeChart = (label, color, data) => ({
     labels,
@@ -110,34 +108,23 @@ export default function LiveMonitor() {
 
         <div className="card">
           <h3>CPU Usage %</h3>
-          <Line
-            data={makeChart("CPU", "#22c55e", cpu)}
-            options={options}
-          />
+          <Line data={makeChart("CPU", "#22c55e", cpu)} options={options} />
         </div>
 
         <div className="card">
           <h3>Memory Usage %</h3>
-          <Line
-            data={makeChart("Memory", "#3b82f6", memory)}
-            options={options}
-          />
+          <Line data={makeChart("Memory", "#3b82f6", memory)} options={options} />
         </div>
 
         <div className="card">
           <h3>Disk Write Speed (MB/s)</h3>
-          <Line
-            data={makeChart("Disk", "#f59e0b", disk)}
-            options={options}
-          />
+          <Line data={makeChart("Disk", "#f59e0b", disk)} options={options} />
         </div>
 
         <div className="card">
           <h3>Risk Score</h3>
-          <Line
-            data={makeChart("Risk", "#ef4444", risk)}
-            options={options}
-          />
+          {/* THIS RED LINE WILL NOW FLUCTUATE WITH THE REAL DATA */}
+          <Line data={makeChart("Risk", "#ef4444", risk)} options={options} />
         </div>
 
       </div>
@@ -152,34 +139,28 @@ export default function LiveMonitor() {
 
         <table>
           <tbody>
-
             <tr>
               <td>Total Processes</td>
               <td>{latest?.process_count ?? "--"}</td>
             </tr>
-
             <tr>
               <td>RAM Available</td>
               <td>
                 {latest
-                  ? `${latest.memory_available_mb.toFixed(0)} MB`
+                  ? `${latest.memory_available_mb?.toFixed(0) || 0} MB`
                   : "--"}
               </td>
             </tr>
-
             <tr>
               <td>Sampling Interval</td>
-              <td>5 Seconds</td>
+              <td><strong>Real-time (1 Second)</strong></td>
             </tr>
-
             <tr>
               <td>CPU Temperature</td>
               <td>N/A</td>
             </tr>
-
           </tbody>
         </table>
-
       </div>
 
     </div>

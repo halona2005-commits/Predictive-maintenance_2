@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect } from "react";
 import { Activity, Cpu, MemoryStick, ListTree, ShieldAlert } from "lucide-react";
 import "./Dashboard.css"; 
 
@@ -11,16 +11,13 @@ import ModelStatus from "../components/ModelStatus";
 import AlertPanel from "../components/AlertPanel";
 import DeviceCard from "../components/DeviceCard";
 
-const API_BASE_URL = "http://127.0.0.1:8000";
-const REFRESH_INTERVAL_MS = 5000;
+// ✨ 1. NEW IMPORT: Swap out the REST API for your WebSocket
+import { connectLiveWS } from "../services/api";
 
 const MODEL_F1_SCORES = {
-  "Random Forest": "98.62%",
+ 
   "XGBoost": "98.75%",
-  "Isolation Forest": "96.40%",
-  "One Class SVM": "94.85%",
-  "Autoencoder": "97.30%",
-  "LSTM": "97.95%",
+
 };
 
 const RISK_BADGE_COLORS = {
@@ -60,50 +57,68 @@ export default function Dashboard() {
   const [history, setHistory] = useState([]);
   const [prediction, setPrediction] = useState(null);
   const [status, setStatus] = useState(null);
-  const [alerts, setAlerts] = useState([]);
+  const [alerts, setAlerts] = useState([]); // eslint-disable-next-line no-unused-vars 
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchAll = useCallback(async () => {
-    try {
-      const [historyRes, predictRes, statusRes, alertsRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/history`),
-        fetch(`${API_BASE_URL}/predict`),
-        fetch(`${API_BASE_URL}/status`),
-        fetch(`${API_BASE_URL}/alerts`),
-      ]);
-
-      if (!historyRes.ok || !predictRes.ok || !statusRes.ok || !alertsRes.ok) {
-        throw new Error("One or more API requests failed");
-      }
-
-      const historyData = await historyRes.json();
-      const predictData = await predictRes.json();
-      const statusData = await statusRes.json();
-      const alertsData = await alertsRes.json();
-
-      setHistory(Array.isArray(historyData.metrics) ? historyData.metrics : []);
-      setPrediction(predictData);
-      setStatus(statusData);
-      setAlerts(Array.isArray(alertsData) ? alertsData : []);
-      setError(null);
-    } catch (err) {
-      setError(err.message || "Failed to fetch dashboard data");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  // ✨ 2. REMOVED fetchAll & setInterval. REPLACED with this WebSocket Effect:
   useEffect(() => {
-    fetchAll();
-    const interval = setInterval(fetchAll, REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [fetchAll]);
+    setLoading(false); // We don't have to wait for an HTTP fetch anymore.
+
+    const ws = connectLiveWS((data) => {
+      console.log("Dashboard Live Data:", data);
+
+      // Map WebSocket fields to the exact variable names your child components expect
+      const newMetric = {
+        cpu_percent: data.cpu,
+        memory_percent: data.memory,
+        disk_write_mbps: data.disk || 0,
+        process_count: data.process_count || 0,
+        memory_available_mb: data.memory_available_mb || 0,
+        risk: data.risk,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Calculate risk level from the floating 0.0 - 1.0 score
+            // --- FIX: Only trigger danger if risk exceeds 0.6 ---
+      let riskLevel = "NORMAL"; 
+      if (data.risk > 0.6) {
+        riskLevel = "HIGH";
+      }
+      
+      // --- FIX: Health is 100% unless risk goes above the anomaly threshold ---
+      const healthPercent = data.risk > 0.6 ? Math.round((1 - data.risk) * 100) : 100;
+
+      // Construct prediction/status objects to match your existing Dashboard code
+      const newPrediction = {
+        risk_score: data.risk,
+        risk_level: riskLevel,
+        confidence: 1.0,
+        votes: 1,
+        models: { "XGBoost": 1 }
+      };
+
+      const newStatus = {
+        risk_level: riskLevel,
+        fault_type: "NONE",
+        severity_level: "INFO"
+      };
+
+      // Update your states (keep last 100 data points for the charts)
+      setHistory(prev => [...prev, newMetric].slice(-100));
+      setPrediction(newPrediction);
+      setStatus(newStatus);
+      setError(null);
+    });
+
+    // Cleanup WebSocket on page leave
+    return () => ws.close();
+  }, []);
 
   const latest = history.length > 0 ? history[history.length - 1] : null;
 
   const riskScore = prediction?.risk_score ?? latest?.risk_score ?? 0;
-  const healthPercent = Math.round(Math.max(0, Math.min(100, (1 - riskScore) * 100)));
+  const healthPercent = riskScore > 0.6 ? Math.round(Math.max(0, Math.min(100, (1 - riskScore) * 100))) : 100;
 
   const overallRiskLevel = prediction?.risk_level || status?.risk_level || "LOW";
 
@@ -123,12 +138,12 @@ export default function Dashboard() {
 
       {error && (
         <div className="error-banner">
-          ⚠ Unable to reach backend at {API_BASE_URL} — {error}
+          ⚠ WebSocket connection lost — {error}
         </div>
       )}
 
       {loading && !latest ? (
-        <div className="loading-state">Loading dashboard data…</div>
+        <div className="loading-state">Connecting to live stream…</div>
       ) : (
         <>
           {/* ROW 2: TOP METRICS */}
