@@ -137,6 +137,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 # SAVE TO CSV FILE
                 append_to_csv(data)
+                print(f"💾 LOGGED TO CSV: CPU={cpu_usage:.1f}%, MEM={memory_usage:.1f}%, RISK={risk_score:.3f}")
 
                 # 4. Send to Frontend
                 await websocket.send_json(data)
@@ -182,73 +183,73 @@ def get_prediction(db: Session = Depends(get_db)) -> PredictionOut:
     if not latest_metric:
         return PredictionOut(
             timestamp=datetime.now().isoformat(),
-            risk_score=0, risk_level="NORMAL",
-            confidence=0, votes=0, fault_type="NONE",
+            risk_score=0.0, risk_level="NORMAL",
+            confidence=0.0, votes=0, fault_type="NONE",
             severity_level="INFO", pem_status="NORMAL", md_status="NORMAL",
             models={}, probabilities={}
         )
 
-    # Get real disk usage directly from psutil (No DB column needed!)
-    real_disk_usage = psutil.disk_usage('/').percent
-
     fault = "NONE"
-    risk_score = 0.0
     confidence = 0.0
-    model_vote = 0
+    risk_score = 0.0
 
-    if xgb_model and scaler:
-        try:
-            # Create a Pandas DataFrame with EXACT column names the model was trained on
-            inputs = pd.DataFrame([[
-                latest_metric.cpu_percent,
-                latest_metric.memory_percent,
-                latest_metric.disk_write_mbps,
-                latest_metric.process_count,
-                real_disk_usage
-            ]], columns=['cpu_percent', 'memory_percent', 'disk_write_mbps', 'process_count', 'ssd_percentage_used'])
-            
-            scaled_inputs = scaler.transform(inputs)
-            probability = xgb_model.predict_proba(scaled_inputs)[0]
-            
-            risk_score = probability[1] 
-            confidence = max(probability) * 100
+    try:
+        # --- CRITICAL FIX: Feed the model the EXACT 10 features it was trained on ---
+        inputs = pd.DataFrame([[
+            latest_metric.cpu_percent,
+            latest_metric.cpu_frequency_mhz,
+            latest_metric.memory_percent,
+            latest_metric.memory_available_mb,
+            latest_metric.disk_percent,
+            latest_metric.disk_read_mbps,
+            latest_metric.disk_write_mbps,
+            latest_metric.network_upload_mbps,
+            latest_metric.network_download_mbps,
+            latest_metric.process_count
+        ]], columns=[
+            'cpu_percent', 'cpu_frequency_mhz', 'memory_percent', 'memory_available_mb', 
+            'disk_percent', 'disk_read_mbps', 'disk_write_mbps', 
+            'network_upload_mbps', 'network_download_mbps', 'process_count'
+        ])
+        
+        scaled_inputs = scaler.transform(inputs)
+        proba = model.predict_proba(scaled_inputs)[0]  # Normal, Moderate, High probabilities
+        predicted_class = model.predict(scaled_inputs)[0]  # 'Normal', 'Moderate', 'High'
 
-            # 🔧 CALIBRATION: Prevents dashboard from being stuck on HIGH when idle
-            if risk_score > 0.6 and latest_metric.cpu_percent < 40 and latest_metric.memory_percent < 70:
-                risk_score = 0.55
+        risk_score = max(proba)
+        confidence = risk_score * 100
+        risk_level = predicted_class.upper()
+        
+        # Log the prediction to terminal (We'll see this!)
+        print(f"🤖 AI Prediction: {risk_level} (Confidence: {confidence:.2f}%)")
 
-            if risk_score > 0.6:
-                fault = "CPU"
-                model_vote = 1
-            
-        except Exception as e:
-            print(f"AI Prediction failed: {e}")
-            # Fallback to rule-based if AI fails
-            risk_score = ((latest_metric.cpu_percent * 0.4) + (latest_metric.memory_percent * 0.6)) / 100
-            model_vote = 1 if risk_score > 0.6 else 0
-            fault = "CPU" if risk_score > 0.6 else "NONE"
-    else:
-        # Rule-Based Fallback (if model files aren't found)
+        if risk_level == "HIGH":
+            fault = "CPU"
+
+    except Exception as e:
+        print(f"❌ AI Prediction failed: {e}")
+        # Fallback rule
         risk_score = ((latest_metric.cpu_percent * 0.4) + (latest_metric.memory_percent * 0.6)) / 100
-        model_vote = 1 if risk_score > 0.6 else 0
+        risk_level = "HIGH" if risk_score > 0.6 else "NORMAL"
         fault = "CPU" if risk_score > 0.6 else "NONE"
-
-    risk_level = "HIGH" if risk_score > 0.6 else "NORMAL"
 
     return PredictionOut(
         timestamp=datetime.now().isoformat(),
-        risk_score=risk_score,
+        risk_score=round(risk_score, 3),
         risk_level=risk_level,
-        confidence=confidence,
+        confidence=round(confidence, 2),
         votes=1,
         fault_type=fault,
-        severity_level="INFO",
+        severity_level="INFO" if risk_level != "HIGH" else "WARNING",
         pem_status="NORMAL",
         md_status="NORMAL",
-        models={"xgboost": model_vote},
-        probabilities={"xgboost": risk_score, "normal": 1 - risk_score},
+        models={"xgboost": 1 if risk_level == "HIGH" else 0},
+        probabilities={
+            "normal": round(proba[0], 3) if 'proba' in locals() else 0,
+            "moderate": round(proba[1], 3) if 'proba' in locals() else 0,
+            "high": round(proba[2], 3) if 'proba' in locals() else 0
+        }
     )
-
 
 # ----------------------------------------------------------------
 # OTHER REST ENDPOINTS

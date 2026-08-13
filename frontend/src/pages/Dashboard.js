@@ -90,12 +90,13 @@ export default function Dashboard() {
       const healthPercent = data.risk > 0.6 ? Math.round((1 - data.risk) * 100) : 100;
 
       // Construct prediction/status objects to match your existing Dashboard code
-      const newPrediction = {
+            const newPrediction = {
         risk_score: data.risk,
         risk_level: riskLevel,
         confidence: 1.0,
         votes: 1,
-        models: { "XGBoost": 1 }
+        // ✅ FIX: Use the frontend logic to determine if the model votes Anomaly (1) or Normal (0)
+        models: { "XGBoost": data.risk >= 0.7 ? 1 : 0 }
       };
 
       const newStatus = {

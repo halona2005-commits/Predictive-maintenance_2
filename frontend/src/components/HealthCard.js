@@ -14,16 +14,13 @@ function HealthCard({health}) {
         color="#f59e0b";
     }
 
-
     return (
-
         <div style={{
             background:"#131720",
             border:"1px solid #232838",
             borderRadius:12,
             padding:"18px"
         }}>
-
             <div style={{
                 color:"#64748b",
                 fontSize:11,
@@ -31,7 +28,6 @@ function HealthCard({health}) {
             }}>
                 System Health
             </div>
-
 
             <div style={{
                 fontSize:50,
@@ -41,19 +37,9 @@ function HealthCard({health}) {
             }}>
                 {health}%
             </div>
-
-
-            <div style={{
-                color,
-                fontSize:13
-            }}>
-                ● {status}
-            </div>
-
+            {/* The status text and bullet point have been removed from here */}
         </div>
-
     );
-
 }
 
 export default HealthCard;

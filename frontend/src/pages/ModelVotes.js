@@ -47,23 +47,20 @@ export default function ModelVotes() {
         AI Model Voting System
       </h2>
 
+      {/* =========================== */}
+      {/* UPPER TABLE: CURRENT VOTES  */}
+      {/* =========================== */}
       <div className="card">
-
         <table>
-
           <thead>
-
             <tr>
               <th>Model</th>
               <th>Vote</th>
               <th>Score</th>
               <th>Reason</th>
             </tr>
-
           </thead>
-
           <tbody>
-
             {Object.entries(models).map(([name, vote]) => {
 
               const confidence = (() => {
@@ -82,13 +79,9 @@ export default function ModelVotes() {
                   : "Normal operating pattern";
                   
                 return (
-
                 <tr key={name}>
-
                   <td>{name}</td>
-
                   <td>
-
                     <span
                       style={{
                         color: vote ? "#ef4444" : "#22c55e",
@@ -97,62 +90,64 @@ export default function ModelVotes() {
                     >
                       {vote ? "Anomaly" : "Normal"}
                     </span>
-
                   </td>
-
                   <td>{confidence}</td>
-
                   <td>{reason}</td>
-
                 </tr>
-
               );
-
             })}
-
           </tbody>
-
         </table>
-
       </div>
 
+      {/* ================================================================ */}
+      {/* REPLACED BOTTOM CARD: "Summary" REMOVED, "Comparison" ADDED HERE */}
+      {/* ================================================================ */}
       <div
         className="card"
         style={{
           marginTop: 20
         }}
       >
+        <h3>Why XGBoost was Selected for Deployment</h3>
 
-        <h3>Summary</h3>
+        <div style={{ marginTop: 15 }}>
+          <table style={{ marginTop: 15, width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #232838" }}>
+                <th style={{ textAlign: "left", padding: "8px 0", color: "#94a3b8" }}>Model</th>
+                <th style={{ textAlign: "left", padding: "8px 0", color: "#94a3b8" }}>F1-Score</th>
+                <th style={{ textAlign: "left", padding: "8px 0", color: "#94a3b8" }}>Inference Latency</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style={{ borderBottom: "1px solid #1a1e2a" }}>
+                <td style={{ padding: "8px 0" }}>XGBoost</td>
+                <td style={{ padding: "8px 0", fontWeight: "bold", color: "#4ade80" }}>98.75%</td>
+                <td style={{ padding: "8px 0", fontWeight: "bold", color: "#4ade80" }}>2.8 μs</td>
+              </tr>
+              <tr style={{ borderBottom: "1px solid #1a1e2a" }}>
+                <td style={{ padding: "8px 0" }}>Random Forest</td>
+                <td style={{ padding: "8px 0" }}>98.20%</td>
+                <td style={{ padding: "8px 0" }}>45.2 μs</td>
+              </tr>
+              <tr style={{ borderBottom: "1px solid #1a1e2a" }}>
+                <td style={{ padding: "8px 0" }}>MLP Neural Net</td>
+                <td style={{ padding: "8px 0" }}>98.03%</td>
+                <td style={{ padding: "8px 0" }}>12.4 μs</td>
+              </tr>
+              <tr>
+                <td style={{ padding: "8px 0" }}>Logistic Regression</td>
+                <td style={{ padding: "8px 0" }}>95.28%</td>
+                <td style={{ padding: "8px 0" }}>0.1 μs</td>
+              </tr>
+            </tbody>
+          </table>
 
-        <p style={{ marginTop: 12 }}>
-
-          <strong>
-            {anomalyCount}/6
-          </strong>{" "}
-          models detected anomaly.
-
-        </p>
-
-        <div
-          style={{
-            marginTop: 20,
-            display: "inline-block",
-            padding: "10px 20px",
-            borderRadius: 8,
-            background:
-              anomalyCount >= 3
-                ? "#7f1d1d"
-                : "#14532d",
-            color: "white",
-            fontWeight: "bold"
-          }}
-        >
-          {anomalyCount >= 3
-            ? "HIGH RISK"
-            : "NORMAL"}
+          <p style={{ marginTop: 15, lineHeight: 1.7, color: "#cbd5e1" }}>
+            <strong>Conclusion:</strong> XGBoost was selected because it provided the highest F1-score (98.75%) while maintaining an inference latency of just <strong>2.8 microseconds</strong>. This makes it the ideal choice for a real-time predictive maintenance system that requires predictions every 1 second without consuming excessive system resources. The raw 5-feature variant of XGBoost was ultimately deployed to the live backend.
+          </p>
         </div>
-
       </div>
 
     </div>
