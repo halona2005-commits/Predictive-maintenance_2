@@ -1,0 +1,5 @@
+Model,Train Acc,Train F1,Train Prec,Train Recall,Test Acc,Test F1,Test Prec,Test Recall,Latency (μs),Train Time (s)
+Random Forest,1.0,1.0,1.0,1.0,0.9986,0.9986,0.9986,0.9986,7.94,1.8
+XGBoost,1.0,1.0,1.0,1.0,0.9992,0.9992,0.9992,0.9992,2.49,0.56
+MLP Neural Net,0.996,0.996,0.996,0.996,0.9958,0.9958,0.9958,0.9958,0.91,12.7
+Logistic Regression,0.8684,0.868,0.8766,0.8684,0.8659,0.8654,0.8758,0.8659,0.15,0.17
