@@ -9,3 +9,4 @@ pandas
 scikit-learn
 xgboost
 tensorflow
+win10toast         
