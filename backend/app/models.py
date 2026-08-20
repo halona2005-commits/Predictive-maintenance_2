@@ -16,6 +16,9 @@ class Metric(Base):
     memory_available_mb = Column(Float, nullable=False)
     disk_write_mbps = Column(Float, nullable=False)
     process_count = Column(Integer, nullable=False)
+    # 👇 ADD THESE TWO NEW COLUMNS
+    top_cpu_process = Column(String, nullable=True)
+    top_mem_process = Column(String, nullable=True)
 
 
 class Prediction(Base):

@@ -2,12 +2,15 @@ import json
 import os
 import sys
 import asyncio
+import time
+import threading
 import psutil
 import joblib
 import pandas as pd
 import csv
 from datetime import datetime
 from pathlib import Path
+from win10toast import ToastNotifier
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, WebSocket
@@ -22,12 +25,8 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# --------------------------------------------------------------
-# SINGLE APP INSTANCE
-# --------------------------------------------------------------
 app = FastAPI(title="Predictive Maintenance API")
 
-# FIXED CORS MIDDLEWARE (Allows localhost:3000 explicitly)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
@@ -39,22 +38,26 @@ app.add_middleware(
 SYSTEM_ID = os.getenv("SYSTEM_ID", "SYSTEM-01")
 
 # --------------------------------------------------------------
-# CSV HELPER FUNCTION (SAVES REAL-TIME DATA TO A CSV FILE)
+# CSV HELPER (Fixed column order)
 # --------------------------------------------------------------
 METRICS_CSV = "live_data_log.csv"
 
 def append_to_csv(data_dict):
-    """Appends real-time data to a CSV file. Creates headers if the file is new."""
+    fieldnames = [
+        'cpu', 'memory', 'disk', 'risk', 'process_count',
+        'memory_available_mb', 'timestamp',
+        'top_cpu_process', 'top_mem_process'
+    ]
     file_exists = os.path.isfile(METRICS_CSV)
     with open(METRICS_CSV, mode='a', newline='') as file:
-        writer = csv.DictWriter(file, fieldnames=data_dict.keys())
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()
-        writer.writerow(data_dict)
+        writer.writerow({k: data_dict.get(k, '') for k in fieldnames})
 
-# ==============================================================
-# 1. LOAD THE RETRAINED 5-FEATURE XGBOOST AI MODEL
-# ==============================================================
+# --------------------------------------------------------------
+# LOAD AI MODEL
+# --------------------------------------------------------------
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(APP_DIR, "xgboost_model.pkl")
 SCALER_PATH = os.path.join(APP_DIR, "scaler.pkl")
@@ -68,9 +71,9 @@ except Exception as e:
     xgb_model = None
     scaler = None
 
-# ==============================================================
-# 2. WEBSOCKET (REAL HARDWARE METRICS + CSV LOGGING)
-# ==============================================================
+# --------------------------------------------------------------
+# WEBSOCKET
+# --------------------------------------------------------------
 previous_disk_bytes = psutil.disk_io_counters().write_bytes if psutil.disk_io_counters() else 0
 
 @app.websocket("/ws/live")
@@ -78,14 +81,18 @@ async def websocket_endpoint(websocket: WebSocket):
     global previous_disk_bytes
     await websocket.accept()
     
+    toaster = ToastNotifier()
+    last_moderate_alert_time = 0
+    current_risk_time = 0
+    
     try:
         while True:
             try:
                 # 1. Fetch REAL system metrics using psutil
-                cpu_usage = psutil.cpu_percent(interval=1)        
-                memory_usage = psutil.virtual_memory().percent    
-                process_count = len(psutil.pids())                
-                memory_available_mb = psutil.virtual_memory().available / (1024 * 1024)  
+                cpu_usage = psutil.cpu_percent(interval=1)
+                memory_usage = psutil.virtual_memory().percent
+                process_count = len(psutil.pids())
+                memory_available_mb = psutil.virtual_memory().available / (1024 * 1024)
 
                 current_disk_bytes = psutil.disk_io_counters().write_bytes if psutil.disk_io_counters() else 0
                 disk_write = (current_disk_bytes - previous_disk_bytes) / (1024 * 1024)
@@ -94,7 +101,20 @@ async def websocket_endpoint(websocket: WebSocket):
                 risk_score = ((cpu_usage * 0.4) + (memory_usage * 0.6)) / 100
                 model_vote = 1 if risk_score > 0.6 else 0
 
-                # 2. Save REAL metrics to Database (No disk_usage column to avoid errors)
+                # =======================================================
+                # COLLECT TOP CPU & MEMORY PROCESS NAMES
+                # =======================================================
+                try:
+                    all_procs = [p for p in psutil.process_iter(['name', 'cpu_percent', 'memory_percent'])]
+                    cpu_sorted = sorted(all_procs, key=lambda p: p.info['cpu_percent'] or 0, reverse=True)
+                    top_cpu_process = cpu_sorted[0].info['name'] if cpu_sorted else "N/A"
+                    mem_sorted = sorted(all_procs, key=lambda p: p.info['memory_percent'] or 0, reverse=True)
+                    top_mem_process = mem_sorted[0].info['name'] if mem_sorted else "N/A"
+                except Exception:
+                    top_cpu_process = "N/A"
+                    top_mem_process = "N/A"
+
+                # 2. Save to Database
                 db = SessionLocal()
                 new_metric = Metric(
                     system_id=SYSTEM_ID,
@@ -103,10 +123,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     memory_available_mb=int(memory_available_mb),
                     disk_write_mbps=round(disk_write, 2),
                     process_count=int(process_count),
+                    top_cpu_process=top_cpu_process,
+                    top_mem_process=top_mem_process,
                 )
                 db.add(new_metric)
 
-                # SAVE PREDICTION TO DB
                 new_prediction = Prediction(
                     timestamp=datetime.now(),
                     risk_score=risk_score,
@@ -124,7 +145,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 db.commit()
                 db.close()
 
-                # 3. Build data packet for Frontend + CSV
+                # 3. Build data packet
                 data = {
                     "cpu": round(cpu_usage, 1),
                     "memory": round(memory_usage, 1),
@@ -132,22 +153,63 @@ async def websocket_endpoint(websocket: WebSocket):
                     "risk": round(risk_score, 3),
                     "process_count": int(process_count),
                     "memory_available_mb": int(memory_available_mb),
+                    "top_cpu_process": top_cpu_process,
+                    "top_mem_process": top_mem_process,
                     "timestamp": datetime.now().isoformat()
                 }
 
-                # SAVE TO CSV FILE
+                # Save CSV and print logs
                 append_to_csv(data)
                 print(f"💾 LOGGED TO CSV: CPU={cpu_usage:.1f}%, MEM={memory_usage:.1f}%, RISK={risk_score:.3f}")
+                print(f"📊 CPU: {cpu_usage:.1f}% | MEM: {memory_usage:.1f}% | RISK: {risk_score:.3f} | TOP CPU: {top_cpu_process} | TOP MEM: {top_mem_process}")
+
+                # ================================================================
+                # 🟡 MODERATE ALERT (Desktop popup, once every 5 minutes)
+                # ================================================================
+                current_ts = time.time()
+                if 0.4 <= risk_score < 0.7:
+                    if current_ts - last_moderate_alert_time > 300: # 300 seconds = 5 mins
+                        toaster.show_toast(
+                            "🟡 Moderate Risk Detected", 
+                            f"System load rising.\nTop process: {top_cpu_process}", 
+                            duration=5
+                        )
+                        last_moderate_alert_time = current_ts
+
+                # ================================================================
+                # 🔴 HIGH ALERT (Desktop popup, 3 continuous times)
+                # ================================================================
+                if risk_score >= 0.7:
+                    current_risk_time += 1
+                    if current_risk_time >= 30: # 30 seconds reached
+                        # Background thread to send 3 notifications without pausing the loop
+                        def send_high_burst(cpu, mem):
+                            for _ in range(3):
+                                toaster.show_toast(
+                                    "⚠️ CRITICAL SYSTEM RISK!",
+                                    f"CPU Spike: {cpu}\nAction required!",
+                                    duration=6
+                                )
+                                time.sleep(2) # Wait 2 seconds between each popup
+                        threading.Thread(target=send_high_burst, args=(top_cpu_process, top_mem_process)).start()
+                        current_risk_time = 0 # Reset the counter so it doesn't immediately fire again
+                else:
+                    current_risk_time = 0 # Reset if it drops below 0.7
+                # ================================================================
 
                 # 4. Send to Frontend
-                await websocket.send_json(data)
-                
+                try:
+                    await websocket.send_json(data)
+                except Exception as send_error:
+                    print(f"❌ WebSocket send failed: {send_error}")
+                    return 
+
                 await asyncio.sleep(1)
 
             except Exception as e:
                 print(f"WebSocket disconnected or cancelled: {e}")
                 return
-            
+
     except Exception as e:
         print(f"WebSocket outer cleanup: {e}")
 
@@ -173,9 +235,6 @@ def create_metric(payload: MetricCreate, db: Session = Depends(get_db)) -> Metri
     return metric
 
 
-# ==============================================================
-# 3. TRUE AI-DRIVEN PREDICTION ENDPOINT (WITH CALIBRATION)
-# ==============================================================
 @app.get("/predict", response_model=PredictionOut)
 def get_prediction(db: Session = Depends(get_db)) -> PredictionOut:
     latest_metric = db.query(Metric).order_by(Metric.id.desc()).first()
@@ -194,7 +253,6 @@ def get_prediction(db: Session = Depends(get_db)) -> PredictionOut:
     risk_score = 0.0
 
     try:
-        # --- CRITICAL FIX: Feed the model the EXACT 10 features it was trained on ---
         inputs = pd.DataFrame([[
             latest_metric.cpu_percent,
             latest_metric.cpu_frequency_mhz,
@@ -213,14 +271,13 @@ def get_prediction(db: Session = Depends(get_db)) -> PredictionOut:
         ])
         
         scaled_inputs = scaler.transform(inputs)
-        proba = model.predict_proba(scaled_inputs)[0]  # Normal, Moderate, High probabilities
-        predicted_class = model.predict(scaled_inputs)[0]  # 'Normal', 'Moderate', 'High'
+        proba = xgb_model.predict_proba(scaled_inputs)[0]
+        predicted_class = xgb_model.predict(scaled_inputs)[0]
 
         risk_score = max(proba)
         confidence = risk_score * 100
         risk_level = predicted_class.upper()
         
-        # Log the prediction to terminal (We'll see this!)
         print(f"🤖 AI Prediction: {risk_level} (Confidence: {confidence:.2f}%)")
 
         if risk_level == "HIGH":
@@ -228,7 +285,6 @@ def get_prediction(db: Session = Depends(get_db)) -> PredictionOut:
 
     except Exception as e:
         print(f"❌ AI Prediction failed: {e}")
-        # Fallback rule
         risk_score = ((latest_metric.cpu_percent * 0.4) + (latest_metric.memory_percent * 0.6)) / 100
         risk_level = "HIGH" if risk_score > 0.6 else "NORMAL"
         fault = "CPU" if risk_score > 0.6 else "NONE"
@@ -251,9 +307,7 @@ def get_prediction(db: Session = Depends(get_db)) -> PredictionOut:
         }
     )
 
-# ----------------------------------------------------------------
-# OTHER REST ENDPOINTS
-# ----------------------------------------------------------------
+
 @app.get("/alerts", response_model=list[AlertOut])
 def get_alerts(db: Session = Depends(get_db)) -> list[AlertOut]:
     return db.query(AnomalyAlert).order_by(AnomalyAlert.id.desc()).limit(20).all()
