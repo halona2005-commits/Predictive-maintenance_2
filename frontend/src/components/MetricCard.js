@@ -1,5 +1,6 @@
 import React from "react";
-
+import { Chart, registerables } from 'chart.js';
+Chart.register(...registerables);
 function MetricCard({ title, value, icon, status }) {
   return (
     <div className="metric-card">

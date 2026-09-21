@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React from "react";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -7,10 +7,11 @@ import {
   LineElement,
   Title,
   Tooltip,
-  Legend
+  Legend,
+  Filler,
 } from "chart.js";
 import { Line } from "react-chartjs-2";
-import { connectLiveWS } from "../services/api";
+import { useLiveData } from "../services/api";
 
 ChartJS.register(
   CategoryScale,
@@ -19,29 +20,22 @@ ChartJS.register(
   LineElement,
   Title,
   Tooltip,
-  Legend
+  Legend,
+  Filler            // ✅ Fixes the "fill option" warning
 );
 
 export default function LiveMonitor() {
-  const [metricsHistory, setMetricsHistory] = useState([]);
+  // 🔥 One line replaces the entire WebSocket useEffect
+  const { history } = useLiveData(2000);
 
-  useEffect(() => {
-    const ws = connectLiveWS((data) => {
-      console.log("Live Data Received:", data);
-      
-      const newPoint = {
-        timestamp: new Date().toLocaleTimeString(),
-        cpu: data.cpu,
-        memory: data.memory,
-        disk: data.disk || 0,
-        risk: data.risk
-      };
-
-      setMetricsHistory(prev => [...prev, newPoint].slice(-50));
-    });
-
-    return () => ws.close();
-  }, []);
+  // Convert history → chart-friendly points
+  const metricsHistory = history.map((m) => ({
+    timestamp: new Date(m.timestamp).toLocaleTimeString(),
+    cpu: m.cpu_percent,
+    memory: m.memory_percent,
+    disk: m.disk_write_mbps,
+    risk: m.risk,
+  })).slice(-50);
 
   const labels = metricsHistory.map((m) => m.timestamp);
   const cpu = metricsHistory.map((m) => m.cpu);
@@ -56,44 +50,31 @@ export default function LiveMonitor() {
         label,
         data,
         borderColor: color,
-        backgroundColor: color,
-        tension: 0.35
-      }
-    ]
+        backgroundColor: color + "33",  // subtle fill
+        tension: 0.35,
+        fill: true,                     // now works (Filler registered)
+        pointRadius: 0,
+      },
+    ],
   });
 
   const options = {
     responsive: true,
+    animation: false,                   // ✅ No animation = faster updates
     plugins: {
-      legend: {
-        labels: {
-          color: "#fff"
-        }
-      }
+      legend: { labels: { color: "#fff" } },
     },
     scales: {
-      x: {
-        ticks: { color: "#ccc" },
-        grid: { color: "#222" }
-      },
-      y: {
-        ticks: { color: "#ccc" },
-        grid: { color: "#222" }
-      }
-    }
+      x: { ticks: { color: "#ccc" }, grid: { color: "#222" } },
+      y: { ticks: { color: "#ccc" }, grid: { color: "#222" } },
+    },
   };
 
   return (
     <div>
       <h2 style={{ marginBottom: 20 }}>Live System Monitor</h2>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 20
-        }}
-      >
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
         <div className="card">
           <h3>CPU Usage %</h3>
           <Line data={makeChart("CPU", "#22c55e", cpu)} options={options} />

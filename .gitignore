@@ -1,4 +1,5 @@
 ﻿venv/
+.venv
 frontend/node_modules/
 __pycache__/
 *.pyc
@@ -10,3 +11,10 @@ backend/predictive_maintenance.db
 backend/live_data_log.csv
 Thumbs.db
 .DS_Store
+# Machine-specific baseline files (each machine generates its own)
+baseline*.json
+backend/baseline*.json
+
+# SQLite journal
+*.db-journal
+*.sqlite3-journal

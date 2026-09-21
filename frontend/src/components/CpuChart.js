@@ -1,4 +1,5 @@
 import React from "react";
+import { Chart, registerables } from 'chart.js';
 import {
   LineChart,
   Line,
@@ -9,6 +10,7 @@ import {
   CartesianGrid,
 } from "recharts";
 
+Chart.register(...registerables);
 function CpuChart({ history }) {
   const data = history.slice(-20).map((item) => ({
     time: new Date(item.timestamp).toLocaleTimeString([], {

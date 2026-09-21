@@ -19,6 +19,12 @@ class Metric(Base):
     # 👇 ADD THESE TWO NEW COLUMNS
     top_cpu_process = Column(String, nullable=True)
     top_mem_process = Column(String, nullable=True)
+    # 👇 ADD THESE 5 NEW COLUMNS
+    cpu_frequency_mhz = Column(Float, nullable=True)
+    disk_percent = Column(Float, nullable=True)
+    disk_read_mbps = Column(Float, nullable=True)
+    network_upload_mbps = Column(Float, nullable=True)
+    network_download_mbps = Column(Float, nullable=True)
 
 
 class Prediction(Base):

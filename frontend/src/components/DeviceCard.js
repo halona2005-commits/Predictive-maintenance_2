@@ -1,4 +1,5 @@
 import React from "react";
+import { Chart, registerables } from 'chart.js';
 import {
   Monitor,
   Cpu,
@@ -6,6 +7,7 @@ import {
   HardDrive
 } from "lucide-react";
 
+Chart.register(...registerables);
 export default function DeviceCard({
   latest,
   riskLevel

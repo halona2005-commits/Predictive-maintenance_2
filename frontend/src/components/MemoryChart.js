@@ -1,4 +1,5 @@
 import React from "react";
+import { Chart, registerables } from 'chart.js';
 import {
   ResponsiveContainer,
   LineChart,
@@ -9,6 +10,7 @@ import {
   CartesianGrid,
 } from "recharts";
 
+Chart.register(...registerables);
 function MemoryChart({ history }) {
 
   const data = history.slice(-20).map((item) => ({
