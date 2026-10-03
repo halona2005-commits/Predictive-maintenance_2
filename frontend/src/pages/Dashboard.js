@@ -12,7 +12,6 @@ import ModelStatus from "../components/ModelStatus";
 import AlertPanel from "../components/AlertPanel";
 import DeviceCard from "../components/DeviceCard";
 
-// 🔥 Changed: import polling hook instead of WebSocket
 import { useLiveData } from "../services/api";
 
 const MODEL_F1_SCORES = { "XGBoost": "98.75%" };
@@ -24,7 +23,6 @@ const RISK_BADGE_COLORS = {
   MODERATE: { color: "#f59e0b", bg: "rgba(245, 158, 11, 0.12)", border: "#f59e0b" },
   HIGH:     { color: "#f97316", bg: "rgba(249, 115, 22, 0.12)", border: "#f97316" },
   CRITICAL: { color: "#ef4444", bg: "rgba(239, 68, 68, 0.12)", border: "#ef4444" },
-  CALIBRATING: { color: "#64748b", bg: "rgba(100, 116, 139, 0.12)", border: "#64748b" },  // ← NEW
 };
 
 function RiskBadge({ level }) {
@@ -46,36 +44,30 @@ function RiskBadge({ level }) {
 }
 
 export default function Dashboard() {
-  // 🔥 ONE LINE replaces the entire WebSocket useEffect
   const { history, prediction, status, latest, error, loading } = useLiveData(2000);
   const [alerts, setAlerts] = React.useState([]);
 
-React.useEffect(() => {
-  const fetchAlerts = async () => {
-    try {
-      const res = await fetch("http://127.0.0.1:8000/alerts");
-      const data = await res.json();
-      setAlerts(data);
-    } catch (e) {
-      // silent
-    }
-  };
-  fetchAlerts();
-  const id = setInterval(fetchAlerts, 5000);
-  return () => clearInterval(id);
-}, []);
+  React.useEffect(() => {
+    const fetchAlerts = async () => {
+      try {
+        const res = await fetch("http://127.0.0.1:8000/alerts");
+        const data = await res.json();
+        setAlerts(data);
+      } catch (e) {
+        // silent
+      }
+    };
+    fetchAlerts();
+    const id = setInterval(fetchAlerts, 5000);
+    return () => clearInterval(id);
+  }, []);
 
   const [alertBannerVisible] = useState(false);
 
-const riskScore = prediction?.risk_score ?? 0;
-const overallRiskLevel = prediction?.risk_level || status?.risk_level || "NORMAL";
-const healthMap = { "NORMAL": 100, "MODERATE": 70, "HIGH": 30, "CRITICAL": 10 ,"CALIBRATING": null
-};
-const healthPercent = healthMap[overallRiskLevel];
-  // Show toast on HIGH risk (simple version, no cooldown complexity)
-  if (riskScore >= 0.7 && latest) {
-    // handled by browser toaster below if needed
-  }
+  const riskScore = prediction?.risk_score ?? 0;
+  const overallRiskLevel = prediction?.risk_level || status?.risk_level || "NORMAL";
+  const healthMap = { "NORMAL": 100, "MODERATE": 70, "HIGH": 30, "CRITICAL": 10 };
+  const healthPercent = healthMap[overallRiskLevel];
 
   return (
     <div className="dashboard-container">
@@ -104,7 +96,7 @@ const healthPercent = healthMap[overallRiskLevel];
       ) : (
         <>
           <div className="metrics-row">
-            <HealthCard health={healthPercent} calibrating={overallRiskLevel === "CALIBRATING"} />
+            <HealthCard health={healthPercent} />
             <MetricCard title="CPU Usage" value={`${latest ? latest.cpu_percent.toFixed(1) : "0.0"}%`} icon={<Cpu size={20} />} status="Current Load" />
             <MetricCard title="Memory Usage" value={`${latest ? latest.memory_percent.toFixed(1) : "0.0"}%`} icon={<MemoryStick size={20} />} status="Current Usage" />
             <MetricCard title="Processes Running" value={latest ? latest.process_count : "0"} icon={<ListTree size={20} />} status="Active Processes" />

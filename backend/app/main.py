@@ -21,7 +21,6 @@ from contextlib import asynccontextmanager
 from app.database import get_db, init_db, SessionLocal
 from app.models import AnomalyAlert, Metric, Prediction
 from app.schemas import AlertOut, HistoryResponse, MetricCreate, MetricOut, PredictionOut, StatusOut
-from app.baseline import compute_baseline, load_baseline, adjust_prediction
 
 print("🟢🟢🟢 main.py LOADED 🟢🟢🟢")
 load_dotenv()
@@ -31,12 +30,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # =============================================================
 # BACKGROUND COLLECTOR (runs forever, writes to DB every 5 sec)
-# Uses RULE-BASED risk score (unchanged)
 # =============================================================
 async def collect_metrics_forever():
     print("🟣 COLLECTOR FUNCTION ENTERED")
     prev_disk_write = psutil.disk_io_counters().write_bytes if psutil.disk_io_counters() else 0
     prev_disk_read = psutil.disk_io_counters().read_bytes if psutil.disk_io_counters() else 0
+
+    # ✅ FIX: Track previous network values for per-second delta
+    net_io_init = psutil.net_io_counters()
+    prev_net_up = net_io_init.bytes_sent if net_io_init else 0
+    prev_net_down = net_io_init.bytes_recv if net_io_init else 0
+
     psutil.cpu_percent(interval=None)
 
     pending_metrics = []
@@ -69,11 +73,16 @@ async def collect_metrics_forever():
             disk_read = (cur_read - prev_disk_read) / (1024 * 1024)
             prev_disk_read = cur_read
 
+            # ✅ FIX: Compute network as per-second delta (matches training)
             net_io = psutil.net_io_counters()
-            net_up = net_io.bytes_sent / (1024 * 1024)
-            net_down = net_io.bytes_recv / (1024 * 1024)
+            cur_net_up = net_io.bytes_sent if net_io else 0
+            cur_net_down = net_io.bytes_recv if net_io else 0
+            net_up = (cur_net_up - prev_net_up) / (1024 * 1024)
+            net_down = (cur_net_down - prev_net_down) / (1024 * 1024)
+            prev_net_up = cur_net_up
+            prev_net_down = cur_net_down
 
-            # Rule-based risk score (unchanged)
+            # Rule-based risk score
             risk_score = ((cpu_usage * 0.4) + (memory_usage * 0.6)) / 100
             model_vote = 1 if risk_score > 0.6 else 0
 
@@ -124,7 +133,7 @@ async def collect_metrics_forever():
             # ============================================================
             HIGH_THRESHOLD = 0.7
             PERSISTENCE_SECONDS = 30
-            ALERT_COOLDOWN_SECONDS = 300   # don't spam more than once per 5 min
+            ALERT_COOLDOWN_SECONDS = 300
 
             if risk_score >= HIGH_THRESHOLD:
                 current_risk_time += 1
@@ -132,8 +141,7 @@ async def collect_metrics_forever():
                     now_ts = time.time()
                     if now_ts - last_alert_time > ALERT_COOLDOWN_SECONDS:
                         print(f"🚨 HIGH RISK PERSISTED 30s — firing alert")
-                        
-                        # 1. Desktop notification (background thread, non-blocking)
+
                         def send_desktop_alert(top_cpu):
                             try:
                                 _toaster = ToastNotifier()
@@ -145,14 +153,13 @@ async def collect_metrics_forever():
                                 )
                             except Exception as _e:
                                 print(f"⚠️ Toast failed: {_e}")
-                        
+
                         threading.Thread(
                             target=send_desktop_alert,
                             args=(top_cpu_process,),
                             daemon=True
                         ).start()
-                        
-                        # 2. Write AnomalyAlert to DB (for dashboard Alerts page)
+
                         try:
                             _db = SessionLocal()
                             _alert = AnomalyAlert(
@@ -168,9 +175,9 @@ async def collect_metrics_forever():
                             print(f"✅ Alert written to DB | ID: {_alert.id}")
                         except Exception as _e:
                             print(f"❌ Alert DB write failed: {_e}")
-                        
+
                         last_alert_time = now_ts
-                        current_risk_time = 0  # reset so it can fire again after cooldown
+                        current_risk_time = 0
             else:
                 current_risk_time = 0
 
@@ -181,11 +188,6 @@ async def collect_metrics_forever():
                 for p in pending_predictions:
                     db.add(p)
                 db.commit()
-                # Try to compute baseline once (returns None if not enough data or already computed)
-                try:
-                    compute_baseline(db)
-                except Exception as e:
-                    print(f"⚠️ Baseline compute skipped: {e}")
                 db.close()
                 pending_metrics = []
                 pending_predictions = []
@@ -200,7 +202,7 @@ async def collect_metrics_forever():
 
 
 # =============================================================
-# LIFESPAN — starts background collector on app startup
+# LIFESPAN
 # =============================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -262,14 +264,23 @@ except Exception as e:
 
 
 # =============================================================
-# WEBSOCKET (kept for compatibility — frontend no longer uses it)
+# WEBSOCKET (kept for compatibility)
 # =============================================================
 previous_disk_bytes = psutil.disk_io_counters().write_bytes if psutil.disk_io_counters() else 0
+previous_disk_read_bytes = psutil.disk_io_counters().read_bytes if psutil.disk_io_counters() else 0
+
+# ✅ FIX: Network delta tracking for WebSocket
+_ws_net_init = psutil.net_io_counters()
+previous_net_up = _ws_net_init.bytes_sent if _ws_net_init else 0
+previous_net_down = _ws_net_init.bytes_recv if _ws_net_init else 0
 
 
 @app.websocket("/ws/live")
 async def websocket_endpoint(websocket: WebSocket):
     global previous_disk_bytes
+    global previous_disk_read_bytes
+    global previous_net_up
+    global previous_net_down
     await websocket.accept()
     psutil.cpu_percent(interval=None)
 
@@ -300,12 +311,18 @@ async def websocket_endpoint(websocket: WebSocket):
                     disk_percent = 0.0
                 disk_io = psutil.disk_io_counters()
                 disk_read_bytes = disk_io.read_bytes if disk_io else 0
-                global previous_disk_read_bytes
                 disk_read_mbps = (disk_read_bytes - previous_disk_read_bytes) / (1024 * 1024)
                 previous_disk_read_bytes = disk_read_bytes
+
+                # ✅ FIX: Network delta
                 net_io = psutil.net_io_counters()
-                network_upload_mbps = net_io.bytes_sent / (1024 * 1024)
-                network_download_mbps = net_io.bytes_recv / (1024 * 1024)
+                cur_net_up = net_io.bytes_sent if net_io else 0
+                cur_net_down = net_io.bytes_recv if net_io else 0
+                network_upload_mbps = (cur_net_up - previous_net_up) / (1024 * 1024)
+                network_download_mbps = (cur_net_down - previous_net_down) / (1024 * 1024)
+                previous_net_up = cur_net_up
+                previous_net_down = cur_net_down
+
                 disk_write = (current_disk_bytes - previous_disk_bytes) / (1024 * 1024)
                 previous_disk_bytes = current_disk_bytes
 
@@ -346,8 +363,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     severity_level="INFO",
                     confidence=0.95,
                     votes=1,
-                    pem_status="NORMAL",       # ✅ kept
-                    md_status="NORMAL",        # ✅ kept
+                    pem_status="NORMAL",
+                    md_status="NORMAL",
                     models_json=json.dumps({"xgboost": model_vote}),
                     probabilities_json=json.dumps({"xgboost": risk_score, "normal": 1 - risk_score})
                 ))
@@ -454,14 +471,15 @@ def get_prediction(db: Session = Depends(get_db)) -> PredictionOut:
             risk_score=0.0, risk_level="NORMAL",
             confidence=0.0, votes=0, fault_type="NONE",
             severity_level="INFO",
-            pem_status="NORMAL",       # ✅ kept
-            md_status="NORMAL",        # ✅ kept
+            pem_status="NORMAL",
+            md_status="NORMAL",
             models={}, probabilities={}
         )
 
     fault = "NONE"
     confidence = 0.0
     risk_score = 0.1
+    risk_level = "NORMAL"
 
     try:
         inputs = pd.DataFrame([[
@@ -488,31 +506,18 @@ def get_prediction(db: Session = Depends(get_db)) -> PredictionOut:
         label_map = {0: "NORMAL", 1: "MODERATE", 2: "HIGH"}
         class_risk_map = {0: 0.1, 1: 0.5, 2: 0.9}
 
-        xgb_level = label_map.get(predicted_class, "NORMAL")
+        risk_level = label_map.get(predicted_class, "NORMAL")
         confidence = float(proba[predicted_class]) * 100
+        risk_score = class_risk_map.get(predicted_class, 0.1)
 
-        # 🎯 Post-processing: apply baseline adjustment
-        current_features = {
-            'cpu_percent': latest_metric.cpu_percent,
-            'cpu_frequency_mhz': latest_metric.cpu_frequency_mhz,
-            'memory_percent': latest_metric.memory_percent,
-            'memory_available_mb': latest_metric.memory_available_mb,
-            'disk_percent': latest_metric.disk_percent,
-            'disk_read_mbps': latest_metric.disk_read_mbps,
-            'disk_write_mbps': latest_metric.disk_write_mbps,
-            'network_upload_mbps': latest_metric.network_upload_mbps,
-            'network_download_mbps': latest_metric.network_download_mbps,
-            'process_count': latest_metric.process_count,
-        }
-        baseline = load_baseline()
-        risk_level = adjust_prediction(xgb_level, current_features, baseline)
-
-        # Map final level to risk_score
-        final_risk_map = {"NORMAL": 0.1, "MODERATE": 0.5, "HIGH": 0.9, "CALIBRATING": 0.0}
-        risk_score = final_risk_map.get(risk_level, 0.1)
-
-        baseline_status = "ready" if baseline else "learning"
-        print(f"🤖 AI Prediction: {xgb_level} → {risk_level} (Conf: {confidence:.2f}%) | Baseline: {baseline_status}")
+        # Idle override: force NORMAL when system is clearly idle
+        if (latest_metric.cpu_percent < 8
+                and latest_metric.memory_percent < 55
+                and risk_level != "HIGH"):
+            risk_level = "NORMAL"
+            confidence = 99.0
+            risk_score = 0.1
+        print(f"🤖 AI Prediction: {risk_level} (Conf: {confidence:.2f}%)")
 
         if risk_level == "HIGH":
             fault = "CPU"
@@ -531,8 +536,8 @@ def get_prediction(db: Session = Depends(get_db)) -> PredictionOut:
         votes=1,
         fault_type=fault,
         severity_level="INFO" if risk_level != "HIGH" else "WARNING",
-        pem_status="NORMAL",       # ✅ kept
-        md_status="NORMAL",        # ✅ kept
+        pem_status="NORMAL",
+        md_status="NORMAL",
         models={"xgboost": 1 if risk_level == "HIGH" else 0},
         probabilities={
             "normal": round(float(proba[0]), 3) if 'proba' in locals() else 0,
@@ -584,13 +589,3 @@ def get_risk_history(db: Session = Depends(get_db)):
         }
         for p in predictions
     ]
-
-
-@app.post("/calibrate")
-def calibrate() -> dict:
-    try:
-        from app.calibration_wrapper import run_calibration
-        result = run_calibration()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Calibration failed: {exc}") from exc
-    return {"status": "calibrated", **result}
