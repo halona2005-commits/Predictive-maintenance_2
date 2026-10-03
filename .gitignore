@@ -1,20 +1,65 @@
-﻿venv/
+﻿# Virtual environments
+venv/
 .venv
+env/
+
+# Node
 frontend/node_modules/
+node_modules/
+
+# Python compiled
 __pycache__/
 *.pyc
-frontend/build/
-.vscode/
-.env
-*.log
-backend/predictive_maintenance.db
-backend/live_data_log.csv
-Thumbs.db
-.DS_Store
-# Machine-specific baseline files (each machine generates its own)
-baseline*.json
-backend/baseline*.json
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
 
-# SQLite journal
+# Frontend build
+frontend/build/
+
+# Editor
+.vscode/
+.idea/
+
+# Environment
+.env
+.env.local
+
+# Logs (except testing CSVs)
+*.log
+
+# Database
+backend/predictive_maintenance.db
+*.db
 *.db-journal
 *.sqlite3-journal
+
+# Live logs
+backend/live_data_log.csv
+
+# Baseline (only if not needed for paper)
+# baseline*.json
+# backend/baseline*.json
+
+# Workload output CSVs (per-run, large)
+DataCollector/collector/*_moderate_2hour_*.csv
+DataCollector/collector/*_moderate_log_*.txt
+DataCollector/collector/*_normal_2hour_*.csv
+DataCollector/collector/*_high_2hour_*.csv
+DataCollector/collector/*_high_log_*.txt
+
+# Stress temp files
+*.bin
+moderate_temp_*.txt
+
+# Testing sanity data (temporary, keep real test CSVs)
+testing/logs/sanity*
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Backups
+*.bak
+*_backup/

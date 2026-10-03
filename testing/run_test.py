@@ -1,8 +1,6 @@
 """
-Predictive Maintenance — Full Test Runner
-Runs NORMAL → MODERATE → HIGH tests sequentially.
-Workloads (moderate_data.py, stress_sequencer.py) launch in NEW cmd windows
-so you can answer their prompts manually.
+Predictive Maintenance — Full Test Runner (all-in-one)
+Auto-detects CPU and RAM. Runs NORMAL → MODERATE → HIGH tests.
 
 USAGE:
   python run_tests.py
@@ -21,15 +19,16 @@ from pathlib import Path
 import psutil
 
 # ---------- CONFIG ----------
-WORKLOAD_DIR = Path(r"D:\projects\Predictive_maintenance_project\DataCollector\collector")
+PROJECT = Path(r"D:\projects\Predictive_maintenance_project\DataCollector\collector").resolve()
 TESTS_DIR = Path(__file__).resolve().parent
 LOGS_DIR = TESTS_DIR / "logs"
 MASTER = TESTS_DIR / "master_results.csv"
 API = "http://127.0.0.1:8000/predict"
-POLL_INTERVAL = 5
+POLL_INTERVAL = 5  # seconds (matches training)
 
 # ---------- AUTO-DETECT SPECS ----------
 def get_cpu_name():
+    """Get CPU model name. Works on Windows; fallback to platform.processor()."""
     try:
         out = subprocess.run(
             ["wmic", "cpu", "get", "name"],
@@ -43,6 +42,7 @@ def get_cpu_name():
     return platform.processor() or "Unknown CPU"
 
 def get_ram_gb():
+    """Get total RAM in GB (rounded)."""
     try:
         return f"{round(psutil.virtual_memory().total / (1024**3))}GB"
     except Exception:
@@ -68,40 +68,44 @@ def sanity_check():
     r = poll()
     if "error" in r:
         print("❌ Backend not responding:", r["error"])
-        print(r"   Start backend first: cd backend && ..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload")
+        print("   Start backend first in Terminal 1:")
+        print(r"     cd D:\projects\Predictive_maintenance_project\backend")
+        print(r"     ..\.venv\Scripts\activate")
+        print(r"     python -m uvicorn app.main:app --reload")
         sys.exit(1)
     print(f"✅ Backend alive | Current: {r.get('risk_level')} ({r.get('confidence')}%)")
 
-def launch_workload(script_name):
-    """Open workload in a new cmd window. User answers prompts manually."""
-    script_path = WORKLOAD_DIR / script_name
-    if not script_path.exists():
-        print(f"❌ Not found: {script_path}")
-        return False
-    # Use 'start' to spawn a new cmd window
-    cmd = f'start "Workload: {script_name}" cmd /k "cd /d {WORKLOAD_DIR} && ..\\.venv\\Scripts\\python.exe {script_name}"'
-    subprocess.Popen(cmd, shell=True)
-    print(f"▶️  Launched {script_name} in new window — answer its prompts there.")
-    return True
-
-def kill_workload():
-    """Kill all python processes spawned by workload (not backend)."""
+def kill_tree(pid):
     try:
-        subprocess.run(
-            'taskkill /F /FI "WINDOWTITLE eq Workload:*" /T',
-            shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       check=False)
     except Exception:
         pass
 
-def run_phase(state, duration_min, out_path, workload_script=None):
+def run_phase(state, duration_min, out_path, workload_cmd=None, workload_input=None):
     end_time = time.time() + duration_min * 60
     correct = total = 0
     buffer = []
     last_progress = time.time()
+    workload = None
 
-    if workload_script:
-        launch_workload(workload_script)
+    if workload_cmd:
+        print(f"\n▶️  Launching: {' '.join(workload_cmd)}")
+        workload = subprocess.Popen(
+            workload_cmd,
+            cwd=str(PROJECT),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(2)
+        if workload_input:
+            try:
+                workload.stdin.write(workload_input.encode())
+                workload.stdin.flush()
+            except Exception as e:
+                print(f"   ⚠️ stdin write failed: {e}")
 
     os.makedirs(out_path.parent, exist_ok=True)
     with open(out_path, "w", newline="") as f:
@@ -145,8 +149,8 @@ def run_phase(state, duration_min, out_path, workload_script=None):
         if buffer:
             with open(out_path, "a", newline="") as f:
                 csv.writer(f).writerows(buffer)
-        if workload_script:
-            kill_workload()
+        if workload:
+            kill_tree(workload.pid)
             time.sleep(1)
 
     acc = correct / total * 100 if total else 0
@@ -201,19 +205,23 @@ def main():
     print("\n" + "=" * 70)
     print(f"  TEST 2/3 — MODERATE ({dur} min moderate_data.py)")
     print("=" * 70)
-    input("Press ENTER to launch moderate workload (opens new window)...")
-    print("   ➜ In the new window: enter PC label, then 'y' to start.")
-    m = run_phase("MODERATE", dur, LOGS_DIR / f"{pc}_moderate.csv",
-                  workload_script="moderate_data.py")
+    input("Press ENTER to launch moderate workload...")
+    m = run_phase(
+        "MODERATE", dur, LOGS_DIR / f"{pc}_moderate.csv",
+        workload_cmd=[sys.executable, "moderate_data.py"],
+        workload_input=f"{pc}\ny\n",
+    )
 
     # ---- TEST 3: HIGH ----
     print("\n" + "=" * 70)
     print(f"  TEST 3/3 — HIGH ({dur} min stress_sequencer.py)")
     print("=" * 70)
-    input("Press ENTER to launch stress workload (opens new window)...")
-    print("   ➜ In the new window: press ENTER to start.")
-    h = run_phase("HIGH", dur, LOGS_DIR / f"{pc}_high.csv",
-                  workload_script="high.py")
+    input("Press ENTER to launch stress workload...")
+    h = run_phase(
+        "HIGH", dur, LOGS_DIR / f"{pc}_high.csv",
+        workload_cmd=[sys.executable, "stress_sequencer.py"],
+        workload_input="\n",
+    )
 
     # ---- SUMMARY ----
     print("\n" + "=" * 70)
