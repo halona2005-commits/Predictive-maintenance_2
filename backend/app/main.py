@@ -36,7 +36,6 @@ async def collect_metrics_forever():
     prev_disk_write = psutil.disk_io_counters().write_bytes if psutil.disk_io_counters() else 0
     prev_disk_read = psutil.disk_io_counters().read_bytes if psutil.disk_io_counters() else 0
 
-    # ✅ FIX: Track previous network values for per-second delta
     net_io_init = psutil.net_io_counters()
     prev_net_up = net_io_init.bytes_sent if net_io_init else 0
     prev_net_down = net_io_init.bytes_recv if net_io_init else 0
@@ -73,7 +72,6 @@ async def collect_metrics_forever():
             disk_read = (cur_read - prev_disk_read) / (1024 * 1024)
             prev_disk_read = cur_read
 
-            # ✅ FIX: Compute network as per-second delta (matches training)
             net_io = psutil.net_io_counters()
             cur_net_up = net_io.bytes_sent if net_io else 0
             cur_net_down = net_io.bytes_recv if net_io else 0
@@ -82,7 +80,6 @@ async def collect_metrics_forever():
             prev_net_up = cur_net_up
             prev_net_down = cur_net_down
 
-            # Rule-based risk score
             risk_score = ((cpu_usage * 0.4) + (memory_usage * 0.6)) / 100
             model_vote = 1 if risk_score > 0.6 else 0
 
@@ -128,9 +125,6 @@ async def collect_metrics_forever():
                 probabilities_json=json.dumps({"xgboost": risk_score, "normal": 1 - risk_score})
             ))
 
-            # ============================================================
-            # 🔔 HIGH RISK DETECTION + NOTIFICATION + ALERT DB WRITE
-            # ============================================================
             HIGH_THRESHOLD = 0.7
             PERSISTENCE_SECONDS = 30
             ALERT_COOLDOWN_SECONDS = 300
@@ -247,20 +241,24 @@ def append_to_csv(data_dict):
 
 
 # =============================================================
-# LOAD AI MODEL
+# LOAD AI MODEL + SCALER + LABEL ENCODER
 # =============================================================
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(APP_DIR, "xgboost_model.pkl")
 SCALER_PATH = os.path.join(APP_DIR, "scaler.pkl")
+LABEL_ENCODER_PATH = os.path.join(APP_DIR, "label_encoder.pkl")
 
 try:
     xgb_model = joblib.load(MODEL_PATH)
     scaler = joblib.load(SCALER_PATH)
+    label_encoder = joblib.load(LABEL_ENCODER_PATH)
     print("✅ Real XGBoost AI Model loaded successfully!")
+    print(f"   Classes: {list(label_encoder.classes_)}")
 except Exception as e:
     print(f"⚠️ Could not load AI Model. Using Rule-Based Fallback. Error: {e}")
     xgb_model = None
     scaler = None
+    label_encoder = None
 
 
 # =============================================================
@@ -269,7 +267,6 @@ except Exception as e:
 previous_disk_bytes = psutil.disk_io_counters().write_bytes if psutil.disk_io_counters() else 0
 previous_disk_read_bytes = psutil.disk_io_counters().read_bytes if psutil.disk_io_counters() else 0
 
-# ✅ FIX: Network delta tracking for WebSocket
 _ws_net_init = psutil.net_io_counters()
 previous_net_up = _ws_net_init.bytes_sent if _ws_net_init else 0
 previous_net_down = _ws_net_init.bytes_recv if _ws_net_init else 0
@@ -314,7 +311,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 disk_read_mbps = (disk_read_bytes - previous_disk_read_bytes) / (1024 * 1024)
                 previous_disk_read_bytes = disk_read_bytes
 
-                # ✅ FIX: Network delta
                 net_io = psutil.net_io_counters()
                 cur_net_up = net_io.bytes_sent if net_io else 0
                 cur_net_down = net_io.bytes_recv if net_io else 0
@@ -480,44 +476,45 @@ def get_prediction(db: Session = Depends(get_db)) -> PredictionOut:
     confidence = 0.0
     risk_score = 0.1
     risk_level = "NORMAL"
+    proba_dict = {"normal": 0.0, "moderate": 0.0, "high": 0.0}
 
     try:
+        # Build 3-feature input matching new model
         inputs = pd.DataFrame([[
             latest_metric.cpu_percent,
-            latest_metric.cpu_frequency_mhz,
             latest_metric.memory_percent,
-            latest_metric.memory_available_mb,
-            latest_metric.disk_percent,
-            latest_metric.disk_read_mbps,
-            latest_metric.disk_write_mbps,
-            latest_metric.network_upload_mbps,
-            latest_metric.network_download_mbps,
-            latest_metric.process_count
+            latest_metric.disk_write_mbps
         ]], columns=[
-            'cpu_percent', 'cpu_frequency_mhz', 'memory_percent', 'memory_available_mb',
-            'disk_percent', 'disk_read_mbps', 'disk_write_mbps',
-            'network_upload_mbps', 'network_download_mbps', 'process_count'
+            'cpu_percent', 'memory_percent', 'disk_write_mbps'
         ])
 
         scaled_inputs = scaler.transform(inputs)
         proba = xgb_model.predict_proba(scaled_inputs)[0]
         predicted_class = int(xgb_model.predict(scaled_inputs)[0])
 
-        label_map = {0: "NORMAL", 1: "MODERATE", 2: "HIGH"}
-        class_risk_map = {0: 0.1, 1: 0.5, 2: 0.9}
-
-        risk_level = label_map.get(predicted_class, "NORMAL")
+        # ✅ FIX: Use label_encoder (classes: ['High', 'Moderate', 'Normal'])
+        # So class 0 → High, 1 → Moderate, 2 → Normal
+        risk_level = str(label_encoder.inverse_transform([predicted_class])[0]).upper()
         confidence = float(proba[predicted_class]) * 100
-        risk_score = class_risk_map.get(predicted_class, 0.1)
 
-        # Idle override: force NORMAL when system is clearly idle
+        # Map risk level to score
+        score_map = {"HIGH": 0.9, "MODERATE": 0.5, "NORMAL": 0.1}
+        risk_score = score_map.get(risk_level, 0.1)
+
+        # Build probabilities dict (matching label encoder order)
+        for i, cls in enumerate(label_encoder.classes_):
+            proba_dict[cls.lower()] = round(float(proba[i]), 3)
+
+        # Idle override
         if (latest_metric.cpu_percent < 8
                 and latest_metric.memory_percent < 55
+                and latest_metric.disk_write_mbps < 1
                 and risk_level != "HIGH"):
             risk_level = "NORMAL"
             confidence = 99.0
             risk_score = 0.1
-        print(f"🤖 AI Prediction: {risk_level} (Conf: {confidence:.2f}%)")
+
+        print(f"🤖 AI Prediction: {risk_level} (Conf: {confidence:.2f}%) | Raw class={predicted_class}")
 
         if risk_level == "HIGH":
             fault = "CPU"
@@ -539,11 +536,7 @@ def get_prediction(db: Session = Depends(get_db)) -> PredictionOut:
         pem_status="NORMAL",
         md_status="NORMAL",
         models={"xgboost": 1 if risk_level == "HIGH" else 0},
-        probabilities={
-            "normal": round(float(proba[0]), 3) if 'proba' in locals() else 0,
-            "moderate": round(float(proba[1]), 3) if 'proba' in locals() else 0,
-            "high": round(float(proba[2]), 3) if 'proba' in locals() else 0
-        }
+        probabilities=proba_dict
     )
 
 
