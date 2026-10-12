@@ -8,4 +8,6 @@ joblib
 pandas
 scikit-learn
 xgboost
-tensorflow
+numpy
+win10toast
+setuptools
