@@ -1,10 +1,8 @@
 """
-Predictive Maintenance — Full Test Runner (all-in-one)
+Predictive Maintenance — Full Test Runner (Updated for Combined Stress)
 Auto-detects CPU and RAM. Runs NORMAL → MODERATE → HIGH tests.
-
-USAGE:
-  python run_tests.py
 """
+
 import os
 import sys
 import csv
@@ -19,16 +17,16 @@ from pathlib import Path
 import psutil
 
 # ---------- CONFIG ----------
-PROJECT = Path(r"D:\projects\Predictive_maintenance_project\DataCollector\collector").resolve()
+# Updated path to match your actual directory
+PROJECT = Path(r"D:\projects\Predictive-maintenance_2\DataCollector\collector").resolve()
 TESTS_DIR = Path(__file__).resolve().parent
 LOGS_DIR = TESTS_DIR / "logs"
 MASTER = TESTS_DIR / "master_results.csv"
 API = "http://127.0.0.1:8000/predict"
-POLL_INTERVAL = 5  # seconds (matches training)
+POLL_INTERVAL = 5  # seconds
 
 # ---------- AUTO-DETECT SPECS ----------
 def get_cpu_name():
-    """Get CPU model name. Works on Windows; fallback to platform.processor()."""
     try:
         out = subprocess.run(
             ["wmic", "cpu", "get", "name"],
@@ -42,7 +40,6 @@ def get_cpu_name():
     return platform.processor() or "Unknown CPU"
 
 def get_ram_gb():
-    """Get total RAM in GB (rounded)."""
     try:
         return f"{round(psutil.virtual_memory().total / (1024**3))}GB"
     except Exception:
@@ -69,9 +66,8 @@ def sanity_check():
     if "error" in r:
         print("❌ Backend not responding:", r["error"])
         print("   Start backend first in Terminal 1:")
-        print(r"     cd D:\projects\Predictive_maintenance_project\backend")
-        print(r"     ..\.venv\Scripts\activate")
-        print(r"     python -m uvicorn app.main:app --reload")
+        print(r"     cd D:\projects\Predictive-maintenance_2\backend")
+        print(r"     ..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload")
         sys.exit(1)
     print(f"✅ Backend alive | Current: {r.get('risk_level')} ({r.get('confidence')}%)")
 
@@ -185,8 +181,8 @@ def main():
 
     cpu, ram = get_specs()
     pc = input("\nPC label (e.g. CollegePC1) [auto: hostname]: ").strip() or platform.node()
-    dur_raw = input("Duration per state in minutes [30]: ").strip()
-    dur = int(dur_raw) if dur_raw else 30
+    dur_raw = input("Duration per state in minutes [3]: ").strip()
+    dur = int(dur_raw) if dur_raw else 3
 
     print(f"\n📋 Plan: 3 tests × {dur} min = ~{dur*3} min total")
     print(f"   PC:  {pc}")
@@ -212,14 +208,14 @@ def main():
         workload_input=f"{pc}\ny\n",
     )
 
-    # ---- TEST 3: HIGH ----
+    # ---- TEST 3: HIGH (UPDATED TO USE COMBINED STRESS) ----
     print("\n" + "=" * 70)
-    print(f"  TEST 3/3 — HIGH ({dur} min stress_sequencer.py)")
+    print(f"  TEST 3/3 — HIGH ({dur} min combined_stress.py)")
     print("=" * 70)
-    input("Press ENTER to launch stress workload...")
+    input("Press ENTER to launch combined stress workload...")
     h = run_phase(
         "HIGH", dur, LOGS_DIR / f"{pc}_high.csv",
-        workload_cmd=[sys.executable, "stress_sequencer.py"],
+        workload_cmd=[sys.executable, "combined_stress.py"],
         workload_input="\n",
     )
 
