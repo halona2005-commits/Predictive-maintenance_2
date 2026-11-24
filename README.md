@@ -1,59 +1,77 @@
 # Predictive Maintenance System
 ### AI-Based Intelligent System for Performance Modelling of Standalone Systems
 
-This project is a full-stack, real-time predictive maintenance system designed specifically for standalone Windows PCs. It continuously monitors hardware metrics (CPU, Memory, Disk, SSD health), runs live inference using a lightweight XGBoost AI model, and visualizes the data on an interactive React dashboard. 
+A full-stack, real-time predictive maintenance system for standalone Windows PCs. 
+Continuously monitors hardware telemetry (CPU, Memory, Disk I/O), runs live 
+inference using a lightweight 3-feature XGBoost classifier, and visualizes the 
+results on an interactive React dashboard.
 
-The system operates entirely offline with no cloud dependency, making it ideal for local, high-privacy environments. It saves all telemetry data to a local SQLite database for historical reporting, and to a CSV file for easy data extraction and backup.
+The system operates **fully offline** with no cloud dependency, stores all 
+telemetry in a local SQLite database, and triggers desktop alerts when high-risk 
+states persist.
 
 ---
 
 ## 🚀 Key Features
 
-- **Real-time Hardware Monitoring:** Uses Python's `psutil` library to poll CPU, Memory, Disk I/O, Process Count, and SSD S.M.A.R.T. attributes at a 1-second interval.
-- **AI-Driven Fault Prediction:** Uses a benchmarked, deployed XGBoost model to output binary predictions (0 = Normal, 1 = Anomaly) with sub-millisecond latency.
-- **Live WebSocket Streaming:** Pushes real-time data to the frontend over a robust WebSocket connection (every 1 second).
-- **Persistent Data Logging:** Stores every metric and prediction in an SQLite database (`predictive_maintenance.db`) and a flat CSV file (`live_data_log.csv`).
-- **Desktop Notifications:** Automatically triggers system alerts when a High or Critical risk condition persists for 30 seconds.
-- **Interactive Dashboard:** Built with React.js and Chart.js, providing live trends, AI model votes, risk analysis, and historical fault logs.
+- **Real-time Hardware Monitoring:** Polls CPU, Memory, and Disk I/O every second 
+  using Python's `psutil` library.
+- **AI-Driven 3-Class Risk Classification:** XGBoost model classifies system 
+  state as **NORMAL**, **MODERATE**, or **HIGH** with sub-millisecond inference.
+- **REST Polling Architecture:** Frontend polls `/predict`, `/history`, `/status`, 
+  and `/alerts` every 2 seconds for deterministic data freshness.
+- **Persistent Data Logging:** Every metric and prediction is stored in SQLite 
+  (`predictive_maintenance.db`) and mirrored to CSV (`live_data_log.csv`).
+- **Desktop Notifications:** Triggers native Windows alerts when HIGH risk 
+  persists for 30 seconds.
+- **Interactive Dashboard:** React + Recharts dashboard with live trends, 
+  risk analysis, and fault logs.
+
+---
+
+## 🧠 Model Details
+
+| Property | Value |
+|----------|-------|
+| Algorithm | XGBoost (multi-class) |
+| Features | `cpu_percent`, `memory_percent`, `disk_write_mbps` |
+| Classes | NORMAL, MODERATE, HIGH |
+| Cross-machine CV accuracy | 99.67% (5-fold GroupKFold) |
+| Inference latency | ~2.5 μs |
+| Training samples | 1,530 (510 per class) |
 
 ---
 
 ## 🛠️ Tech Stack
 
-**Backend:** Python 3.11, FastAPI, Uvicorn, SQLAlchemy, SQLite
-**Frontend:** React.js, Recharts, CSS3
-**Machine Learning:** XGBoost, Scikit-learn, Pandas
+**Backend:** Python 3.12+, FastAPI, Uvicorn, SQLAlchemy, SQLite  
+**Frontend:** React.js, Recharts, CSS3  
+**ML:** XGBoost, Scikit-learn, Pandas, joblib
 
 ---
 
 ## 📁 Project Structure
 
 ```text
-Predictive-maintenance2/
+Predictive-maintenance_2/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py              # Main FastAPI + WebSocket server
-│   │   ├── models.py            # SQLAlchemy database schema
-│   │   ├── schemas.py           # Pydantic data validation models
-│   │   ├── database.py          # DB connection setup
-│   │   ├── xgboost_model.pkl    # Trained AI model
-│   │   └── scaler.pkl           # Trained data scaler
-│   ├── .env                     # Environment variables (SYSTEM_ID)
-│   ├── predictive_maintenance.db # Live SQLite database
-│   ├── live_data_log.csv        # Live CSV backup log
-│   └── requirements.txt         # Python dependencies
-├── frontend/                    # React dashboard source code
-├── venv/                        # Python virtual environment
-└── .gitignore                   # Git ignore rules
-
-Set up for backend
-cd backend
-python -m venv venv
-.\venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-
-Set up for frontend
-cd frontend
-npm install
-npm start
+│   │   ├── main.py                 # FastAPI server + collector + prediction
+│   │   ├── models.py               # SQLAlchemy schema
+│   │   ├── schemas.py              # Pydantic models
+│   │   ├── database.py             # SQLite connection
+│   │   ├── xgboost_model.pkl       # Trained v2 model
+│   │   ├── scaler.pkl              # StandardScaler
+│   │   └── label_encoder.pkl       # Class label mapping
+│   └── requirements.txt
+├── DataCollector/                  # Data collection + training scripts
+│   ├── datasets_v2/                # Clean 3-feature training data
+│   ├── models_v2/                  # Trained v2 model artifacts
+│   ├── retrain_v2_fixed.py         # Retraining script
+│   └── final_training_data_3class.csv
+├── frontend/                       # React dashboard
+├── testing/                        # Automated test framework
+│   ├── run_tests.py                # NORMAL/MODERATE/HIGH test runner
+│   ├── master_results.csv          # Cross-hardware results
+│   └── watch.py                    # Live prediction monitor
+└── .gitignore
