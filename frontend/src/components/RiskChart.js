@@ -62,7 +62,7 @@ function RiskChart({ history }) {
           <Area
             type="monotone"
             dataKey="risk"
-            stroke="#ef4444"
+            stroke="#fa0e0e"
             fill="#7f1d1d"
           />
 

@@ -26,28 +26,22 @@ function App() {
   }, []);
 
   const menu = [
-    { path: "/", label: "📊 Dashboard" },
-    { path: "/live", label: "🟢 Live Monitor" },
-    { path: "/votes", label: "🧠 Model Votes" },
-    { path: "/risk", label: "📈 Risk Analysis" },
-    { path: "/fault", label: "⚠ Fault Prediction" },
-    { path: "/alerts", label: "🔔 Alerts" },
-    { path: "/history", label: "📜 History" },
-    { path: "/reports", label: "📄 Reports" },
-    { path: "/settings", label: "⚙ Settings" },
-    { path: "/about", label: "ℹ About" }
+    { path: "/", label: "Dashboard" },
+    { path: "/live", label: "Live Monitor" },
+    { path: "/votes", label: "Model Votes" },
+    { path: "/risk", label: "Risk Analysis" },
+    { path: "/fault", label: "Fault Prediction" },
+    { path: "/alerts", label: "Alerts" },
+    { path: "/history", label: "History" },
+    { path: "/reports", label: "Reports" },
+    { path: "/settings", label: "Settings" },
+    { path: "/about", label: "About" }
   ];
 
   return (
     <div className="app">
 
       <aside className="sidebar">
-
-        <div className="logo">
-          Predictive
-          <span>Maintenance</span>
-        </div>
-
         <nav>
 
           {menu.map((item) => (

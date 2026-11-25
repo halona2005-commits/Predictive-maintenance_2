@@ -12,6 +12,14 @@ from datetime import datetime
 from pathlib import Path
 from win10toast import ToastNotifier
 
+# Try to import WMI for Thermal Guardrail
+try:
+    import wmi
+    WMI_AVAILABLE = True
+except ImportError:
+    WMI_AVAILABLE = False
+    print("⚠️ WMI module not found. Thermal Guardrail will be disabled. Run 'pip install wmi'.")
+
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +35,20 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# =============================================================
+# THERMAL GUARDRAIL FUNCTION
+# =============================================================
+def get_cpu_temperature():
+    if not WMI_AVAILABLE:
+        return None
+    try:
+        w = wmi.WMI(namespace="root\\wmi")
+        temperature_info = w.MSAcpi_ThermalZoneTemperature()
+        # WMI returns temp in tenths of Kelvin. Convert to Celsius.
+        temp_celsius = (temperature_info[0].CurrentTemperature / 10.0) - 273.15
+        return round(temp_celsius, 1)
+    except Exception:
+        return None
 
 # =============================================================
 # BACKGROUND COLLECTOR (runs forever, writes to DB every 5 sec)
@@ -79,6 +101,10 @@ async def collect_metrics_forever():
             net_down = (cur_net_down - prev_net_down) / (1024 * 1024)
             prev_net_up = cur_net_up
             prev_net_down = cur_net_down
+
+            # Thermal Check for Logging
+            temp = get_cpu_temperature()
+            temp_str = f" | TEMP: {temp}°C" if temp else ""
 
             risk_score = ((cpu_usage * 0.4) + (memory_usage * 0.6)) / 100
             model_vote = 1 if risk_score > 0.6 else 0
@@ -185,7 +211,7 @@ async def collect_metrics_forever():
                 db.close()
                 pending_metrics = []
                 pending_predictions = []
-                print(f"💾 Saved to DB | CPU: {cpu_usage:.1f}% | MEM: {memory_usage:.1f}% | RISK: {risk_score:.3f}")
+                print(f"💾 Saved to DB | CPU: {cpu_usage:.1f}% | MEM: {memory_usage:.1f}% | RISK: {risk_score:.3f}{temp_str}")
 
             cycle_count += 1
             await asyncio.sleep(1)
@@ -492,8 +518,6 @@ def get_prediction(db: Session = Depends(get_db)) -> PredictionOut:
         proba = xgb_model.predict_proba(scaled_inputs)[0]
         predicted_class = int(xgb_model.predict(scaled_inputs)[0])
 
-        # ✅ FIX: Use label_encoder (classes: ['High', 'Moderate', 'Normal'])
-        # So class 0 → High, 1 → Moderate, 2 → Normal
         risk_level = str(label_encoder.inverse_transform([predicted_class])[0]).upper()
         confidence = float(proba[predicted_class]) * 100
 
@@ -524,6 +548,18 @@ def get_prediction(db: Session = Depends(get_db)) -> PredictionOut:
         risk_score = ((latest_metric.cpu_percent * 0.4) + (latest_metric.memory_percent * 0.6)) / 100
         risk_level = "HIGH" if risk_score > 0.6 else "NORMAL"
         fault = "CPU" if risk_score > 0.6 else "NONE"
+
+    # =========================================================
+    # 🚨 NEW: THERMAL GUARDRAIL OVERRIDE
+    # =========================================================
+    current_temp = get_cpu_temperature()
+    if current_temp is not None and current_temp > 90.0:
+        risk_level = "HIGH"
+        confidence = 99.9
+        risk_score = 0.9
+        fault = "THERMAL"
+        print(f"🔥 THERMAL THROTTLING DETECTED: {current_temp}°C — Overriding AI to HIGH")
+    # =========================================================
 
     return PredictionOut(
         timestamp=datetime.now().isoformat(),

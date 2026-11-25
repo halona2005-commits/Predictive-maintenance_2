@@ -73,7 +73,7 @@ export default function Dashboard() {
     <div className="dashboard-container">
       {alertBannerVisible && (
         <div className="alert-banner">
-          🚨 WARNING: System Risk is HIGH!
+          WARNING: System Risk is HIGH!
         </div>
       )}
 

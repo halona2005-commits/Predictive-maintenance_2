@@ -163,7 +163,7 @@ const riskValues = Array.isArray(riskHistory)
                                 backgroundColor:[
                                      "#103d85",
                                      "#f59e0b",
-                                     "#ef4444",
+                                     "#44b6ef",
                                      "#8b5cf6"
                                 ],
                                 borderRadius:8
