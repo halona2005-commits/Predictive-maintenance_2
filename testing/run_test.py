@@ -1,8 +1,3 @@
-"""
-Predictive Maintenance — Full Test Runner (Updated for Combined Stress)
-Auto-detects CPU and RAM. Runs NORMAL → MODERATE → HIGH tests.
-"""
-
 import os
 import sys
 import csv
@@ -13,71 +8,43 @@ import subprocess
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-
 import psutil
 
 # ---------- CONFIG ----------
-# Updated path to match your actual directory
-PROJECT = Path(r"D:\projects\Predictive-maintenance_2\DataCollector\collector").resolve()
+# Auto-detect the DataCollector folder relative to the testing folder
+PROJECT = Path(__file__).resolve().parent.parent / "DataCollector" / "collector"
 TESTS_DIR = Path(__file__).resolve().parent
 LOGS_DIR = TESTS_DIR / "logs"
 MASTER = TESTS_DIR / "master_results.csv"
 API = "http://127.0.0.1:8000/predict"
-POLL_INTERVAL = 5  # seconds
+POLL_INTERVAL = 5
 
-# ---------- AUTO-DETECT SPECS ----------
 def get_cpu_name():
     try:
-        out = subprocess.run(
-            ["wmic", "cpu", "get", "name"],
-            capture_output=True, text=True, timeout=5
-        ).stdout
+        out = subprocess.run(["wmic", "cpu", "get", "name"], capture_output=True, text=True, timeout=5).stdout
         lines = [l.strip() for l in out.splitlines() if l.strip() and "Name" not in l]
-        if lines:
-            return lines[0]
-    except Exception:
-        pass
+        if lines: return lines[0]
+    except Exception: pass
     return platform.processor() or "Unknown CPU"
 
 def get_ram_gb():
-    try:
-        return f"{round(psutil.virtual_memory().total / (1024**3))}GB"
-    except Exception:
-        return "Unknown"
+    try: return f"{round(psutil.virtual_memory().total / (1024**3))}GB"
+    except Exception: return "Unknown"
 
-def get_specs():
-    cpu = get_cpu_name()
-    ram = get_ram_gb()
-    print(f"🔍 Auto-detected specs:")
-    print(f"   CPU: {cpu}")
-    print(f"   RAM: {ram}")
-    return cpu, ram
-
-# ---------- API ----------
 def poll():
     try:
-        with urllib.request.urlopen(API, timeout=5) as r:
-            return json.loads(r.read())
-    except Exception as e:
-        return {"error": str(e)}
+        with urllib.request.urlopen(API, timeout=5) as r: return json.loads(r.read())
+    except Exception as e: return {"error": str(e)}
 
 def sanity_check():
     r = poll()
     if "error" in r:
         print("❌ Backend not responding:", r["error"])
-        print("   Start backend first in Terminal 1:")
-        print(r"     cd D:\projects\Predictive-maintenance_2\backend")
-        print(r"     ..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload")
         sys.exit(1)
-    print(f"✅ Backend alive | Current: {r.get('risk_level')} ({r.get('confidence')}%)")
+    print(f"✅ Backend alive | Current: {r.get('risk_level')}")
 
 def kill_tree(pid):
-    try:
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       check=False)
-    except Exception:
-        pass
+    subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
 
 def run_phase(state, duration_min, out_path, workload_cmd=None, workload_input=None):
     end_time = time.time() + duration_min * 60
@@ -88,20 +55,28 @@ def run_phase(state, duration_min, out_path, workload_cmd=None, workload_input=N
 
     if workload_cmd:
         print(f"\n▶️  Launching: {' '.join(workload_cmd)}")
-        workload = subprocess.Popen(
-            workload_cmd,
-            cwd=str(PROJECT),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        time.sleep(2)
-        if workload_input:
-            try:
-                workload.stdin.write(workload_input.encode())
-                workload.stdin.flush()
-            except Exception as e:
-                print(f"   ⚠️ stdin write failed: {e}")
+        try:
+            workload = subprocess.Popen(
+                workload_cmd, 
+                cwd=str(PROJECT), 
+                stdin=subprocess.PIPE, 
+                stdout=subprocess.DEVNULL, 
+                stderr=subprocess.DEVNULL
+            )
+            time.sleep(2)
+            # Check if the process crashed instantly (e.g., missing psutil)
+            if workload.poll() is not None:
+                print(f"   ⚠️ Workload crashed immediately. Missing library? (Check 'pip install psutil')")
+            elif workload_input:
+                try:
+                    workload.stdin.write(workload_input.encode())
+                    workload.stdin.flush()
+                except OSError:
+                    pass # Ignore broken pipe if process died during write
+        except Exception as e:
+            print(f"   ❌ Failed to launch workload. Check path: {PROJECT}")
+            print(f"   Error: {e}")
+            return {"total": 0, "correct": 0, "acc": 0}
 
     os.makedirs(out_path.parent, exist_ok=True)
     with open(out_path, "w", newline="") as f:
@@ -113,21 +88,18 @@ def run_phase(state, duration_min, out_path, workload_cmd=None, workload_input=N
         while time.time() < end_time:
             r = poll()
             if "error" in r:
-                time.sleep(POLL_INTERVAL)
-                continue
+                time.sleep(POLL_INTERVAL); continue
 
             pred = (r.get("risk_level") or "UNKNOWN").upper()
-            conf = r.get("confidence", 0.0) or 0.0
+            conf = r.get("confidence", 0.0)
             ts = datetime.now().strftime("%H:%M:%S")
             ok = 1 if pred == state else 0
 
-            correct += ok
-            total += 1
+            correct += ok; total += 1
             buffer.append([ts, state, pred, conf, ok])
 
             if len(buffer) >= 5:
-                with open(out_path, "a", newline="") as f:
-                    csv.writer(f).writerows(buffer)
+                with open(out_path, "a", newline="") as f: csv.writer(f).writerows(buffer)
                 buffer = []
 
             if time.time() - last_progress >= 30:
@@ -135,19 +107,14 @@ def run_phase(state, duration_min, out_path, workload_cmd=None, workload_input=N
                 rem = int(end_time - time.time())
                 print(f"   [{ts}] expected={state} acc={acc:5.1f}%  remaining={rem//60}m{rem%60}s")
                 last_progress = time.time()
-
             time.sleep(POLL_INTERVAL)
-
     except KeyboardInterrupt:
-        print("\n⚠️ Phase stopped early by user.")
-
+        print("\n⚠️ Phase stopped early.")
     finally:
         if buffer:
-            with open(out_path, "a", newline="") as f:
-                csv.writer(f).writerows(buffer)
+            with open(out_path, "a", newline="") as f: csv.writer(f).writerows(buffer)
         if workload:
-            kill_tree(workload.pid)
-            time.sleep(1)
+            kill_tree(workload.pid); time.sleep(1)
 
     acc = correct / total * 100 if total else 0
     print(f"\n✅ {state}: {total} samples | {correct} correct | accuracy = {acc:.2f}%")
@@ -157,75 +124,43 @@ def append_master(pc, cpu, ram, n, m, h):
     o_total = n["total"] + m["total"] + h["total"]
     o_correct = n["correct"] + m["correct"] + h["correct"]
     overall = o_correct / o_total * 100 if o_total else 0
-
-    row = [pc, cpu, ram,
-           f"{n['acc']:.2f}%", f"{m['acc']:.2f}%", f"{h['acc']:.2f}%",
-           f"{overall:.2f}%"]
-
+    row = [pc, cpu, ram, f"{n['acc']:.2f}%", f"{m['acc']:.2f}%", f"{h['acc']:.2f}%", f"{overall:.2f}%"]
     header_needed = not MASTER.exists()
     with open(MASTER, "a", newline="") as f:
         w = csv.writer(f)
-        if header_needed:
-            w.writerow(["PC", "CPU", "RAM", "Normal Acc", "Mod Acc", "High Acc", "Overall Acc"])
+        if header_needed: w.writerow(["PC", "CPU", "RAM", "Normal Acc", "Mod Acc", "High Acc", "Overall Acc"])
         w.writerow(row)
-
     print(f"\n📊 Master results updated: {MASTER}")
-    print("   " + " | ".join(row))
 
-# ---------- MAIN ----------
 def main():
-    print("=" * 70)
-    print("  Predictive Maintenance — Full Test Runner")
-    print("=" * 70)
+    print("=" * 70); print("  Predictive Maintenance — Test Runner"); print("=" * 70)
     sanity_check()
-
-    cpu, ram = get_specs()
-    pc = input("\nPC label (e.g. CollegePC1) [auto: hostname]: ").strip() or platform.node()
-    dur_raw = input("Duration per state in minutes [3]: ").strip()
+    cpu = get_cpu_name(); ram = get_ram_gb()
+    print(f"🔍 CPU: {cpu} | RAM: {ram}")
+    
+    pc = input("\nPC label [auto: hostname]: ").strip() or platform.node()
+    dur_raw = input("Duration per state [3]: ").strip()
     dur = int(dur_raw) if dur_raw else 3
 
-    print(f"\n📋 Plan: 3 tests × {dur} min = ~{dur*3} min total")
-    print(f"   PC:  {pc}")
-    print(f"   CPU: {cpu}")
-    print(f"   RAM: {ram}")
-    input("\nPress ENTER to start (Ctrl+C to cancel)...")
+    input("\nPress ENTER to start...")
 
-    # ---- TEST 1: NORMAL ----
-    print("\n" + "=" * 70)
-    print(f"  TEST 1/3 — NORMAL ({dur} min idle)")
-    print("=" * 70)
+    # 1. NORMAL
+    print("\n" + "=" * 70 + "\n  TEST 1/3 — NORMAL\n" + "=" * 70)
     input("Close heavy apps now, then press ENTER...")
     n = run_phase("NORMAL", dur, LOGS_DIR / f"{pc}_normal.csv")
 
-    # ---- TEST 2: MODERATE ----
-    print("\n" + "=" * 70)
-    print(f"  TEST 2/3 — MODERATE ({dur} min moderate_data.py)")
-    print("=" * 70)
+    # 2. MODERATE
+    print("\n" + "=" * 70 + "\n  TEST 2/3 — MODERATE\n" + "=" * 70)
     input("Press ENTER to launch moderate workload...")
-    m = run_phase(
-        "MODERATE", dur, LOGS_DIR / f"{pc}_moderate.csv",
-        workload_cmd=[sys.executable, "moderate_data.py"],
-        workload_input=f"{pc}\ny\n",
-    )
+    m = run_phase("MODERATE", dur, LOGS_DIR / f"{pc}_moderate.csv", workload_cmd=[sys.executable, "moderate_data.py"], workload_input=f"{pc}\ny\n")
 
-    # ---- TEST 3: HIGH (UPDATED TO USE COMBINED STRESS) ----
-    print("\n" + "=" * 70)
-    print(f"  TEST 3/3 — HIGH ({dur} min combined_stress.py)")
-    print("=" * 70)
+    # 3. HIGH
+    print("\n" + "=" * 70 + "\n  TEST 3/3 — HIGH\n" + "=" * 70)
     input("Press ENTER to launch combined stress workload...")
-    h = run_phase(
-        "HIGH", dur, LOGS_DIR / f"{pc}_high.csv",
-        workload_cmd=[sys.executable, "combined_stress.py"],
-        workload_input="\n",
-    )
+    h = run_phase("HIGH", dur, LOGS_DIR / f"{pc}_high.csv", workload_cmd=[sys.executable, "combined_stress.py"], workload_input="\n")
 
-    # ---- SUMMARY ----
-    print("\n" + "=" * 70)
-    print("  ✅ ALL TESTS COMPLETE")
-    print("=" * 70)
+    print("\n" + "=" * 70 + "\n  ✅ ALL TESTS COMPLETE\n" + "=" * 70)
     append_master(pc, cpu, ram, n, m, h)
-    print(f"\n📁 Per-phase logs: {LOGS_DIR}")
-    print(f"📊 Master file: {MASTER}")
 
 if __name__ == "__main__":
     main()
